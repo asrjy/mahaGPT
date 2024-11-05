@@ -75,24 +75,45 @@ class Head(nn.Module):
         return out
     
 class MultiHeadAttention(nn.Module):
+
     def __init__(self, num_heads, head_size):
         super().__init__ ()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_emb_d, n_emb_d)
 
     def forward(self, x):
-       return torch.cat([h(x) for h in self.heads], dim = -1)
+        out = torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.proj(out)
+        return out
+    
    
 class FeedForward(nn.Module):
     
     def __init__(self, n_emb_d):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_emb_d, n_emb_d),
-            nn.ReLU()
+            nn.Linear(n_emb_d, 4 * n_emb_d),
+            nn.ReLU(),
+            nn.Linear(4 * n_emb_d, n_emb_d)
         )
     
     def forward(self, x):
         return self.net(x)
+    
+class Block(nn.Module):
+   
+    def __init__(self, n_emb_d, n_head):
+        super().__init__()
+        head_size = n_emb_d // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_emb_d)
+        self.ln1 = nn.LayerNorm(n_emb_d)
+        self.ln2 = nn.LayerNorm(n_emb_d)
+    
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
 
 class BigramModel(nn.Module):
 
@@ -100,7 +121,14 @@ class BigramModel(nn.Module):
     super().__init__()
     self.token_embedding_table = nn.Embedding(vocab_size, n_emb_d) 
     self.position_embedding_table = nn.Embedding(block_size, n_emb_d)
-    self.sa_heads = MultiHeadAttention(4, n_emb_d//4)
+    self.blocks = nn.Sequential(
+            Block(n_emb_d, n_head=4),
+            Block(n_emb_d, n_head=4),
+            Block(n_emb_d, n_head=4)
+            nn.LayerNorm(n_emb_d)
+        )   
+    # self.sa_heads = MultiHeadAttention(4, n_emb_d//4)
+    # self.ffwd = FeedForward(n_emb_d)
     self.lm_head = nn.Linear(n_emb_d, vocab_size) #language_modelling_head
 
   def forward(self, idx, targets=None):
@@ -109,7 +137,9 @@ class BigramModel(nn.Module):
     token_embeddings = self.token_embedding_table(idx) # shape: (batch_size, context_length_size, number_of_embedding_dimensions)
     pos_embeddings = self.position_embedding_table(torch.arange(T, device=device)) # shape: (context_length_size, number_of_embedding_dimensions)
     x = token_embeddings + pos_embeddings # shape: (batch_size, context_length_size, vocabulary_size). broadcasting involved
-    x = self.sa_heads(x)
+    # x = self.sa_heads(x)
+    # x = self.ffwd(x)
+    x = self.blocks(x)
     logits = self.lm_head(x) # shape: (batch_size, context_length_size, vocabulary_size)
     
     if targets is None: 
